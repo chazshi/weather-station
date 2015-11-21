@@ -1,0 +1,175 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=0">
+    <!-- <meta http-equiv="refresh" content="2">每隔2秒刷新一次 -->
+    <title>设备联动</title>
+    <link rel="stylesheet" href="../css/header.css">
+    <link rel="stylesheet" href="../css/layout.css">
+    <script type="text/javascript" src="../script/mqttws31.js"></script>
+    <script type="text/javascript" src="../script/jquery-2.1.3.js"></script>
+    <script type="text/javascript" src="../script/jquery.md5.js"></script>
+</head>
+<body>
+    <div class="wrapper qixiangzhan">
+        <header id="header" class="header">
+            <div class="head">
+                <!-- <a class="left" onclick="checkpage()" id="backleft"></a> -->
+                <span class="center" id="device_name">气象站</span>
+                <!-- <a class="right" onclick="setting()" id="backright"></a> -->
+            </div>
+        </header>
+    	<div class="content">
+    		<table border="1">
+    		  <tr>
+    		    <th>ID</th>
+    		    <th>Name</th>
+                <th>offline</th>
+    		    <th>温度</th>
+    		    <th>湿度</th>
+    		    <th>风向</th>
+    		    <th>风速</th>
+    		  </tr>
+    		</table>
+    	</div>
+    </div>
+</body>
+	<script>
+        var idarray = new Array();
+        var namearray = new Array();
+        var onlinearray = new Array();
+        
+        //配置签名
+        var app_secret = '9b253c408551c9a7d9b719853462d510';
+        var timestamp = new Date().getTime();
+        var signString = $.md5(app_secret+timestamp)+', '+timestamp;
+        //获取设备列表
+        $.ajax({
+            type : 'post',
+            url : 'http://api.easylink.io/v1/device/fetchByPage',
+            headers : {
+                "Authorization" : "token a1863b45-d3f3-454d-b951-ab58adfc7ec8",
+                "X-Application-Id" : 'cc855e1a-f0f6-43c8-aeda-914b1f054e92',
+                //"X-Request-Sign" : signString
+            },
+            data : {
+                'limit' : 10
+            },
+            success : function(data) {
+                $(data.data).each(function(n,element){
+                    idarray.push(element.id);
+                    namearray.push(element.alias);
+                    onlinearray.push(element.online)
+                });
+                var statustab = $("table>tbody").html();        
+                // 如果设备ID不为空，则执行连接MQTT的操作
+                if (idarray.length !== 0) {
+                    $(idarray).each(function(n,element){
+                        ez_connect(element,n);//连接每一个设备
+                        var onlinetxt;
+                        var ishighlight;
+                        if(onlinearray[n] == 0){
+                            onlinetxt = "offline";
+                            ishighlight = '';
+
+                        }else{
+                            onlinetxt = "online";
+                            ishighlight = ' class="highlight"';
+
+                        }
+                        statustab += '<tr'+ishighlight+'>'
+                            + '<td>' + element + '</td>'
+                            + '<td>' + namearray[n] + '</td>'
+                            + '<td>' + onlinetxt + '</td>'
+                            + '<td>0℃</td>'
+                            + '<td>0%</td>'
+                            + '<td>'+"0°"+'</td>'
+                            + '<td>0km/h</td>'
+                            + '</tr>';
+                    });
+                }
+                $("table>tbody").html(statustab);
+
+                console.log("success" + data);
+            },
+            error : function(data) {
+                console.log("失败了" + data.responseText);
+            }
+        });
+
+        var clientArray = new Array();     
+        // 连接MQTT服务
+        function ez_connect(device_id,n) {
+            var host = "api.easylink.io";
+            var port = 1983;
+            //clientID，需要按照此标准来定义：v1-app-[MAC]  版本号-app-手机MAC(12位)
+            var clientID = "v1-app-" + parseInt(Math.random() * (1000000000000), 12);
+            var client = new Paho.MQTT.Client(host, Number(port), clientID);
+            client.onConnectionLost = onConnectionLost;
+            client.onMessageArrived = onMessageArrived;
+            client.connect({onSuccess:onConnect});
+            clientArray.push(client);
+            function onConnect() {
+                // Once a connection has been made, make a subscription and send a message.
+                console.log("onConnect");
+                client.subscribe(device_id + "/out");   //订阅消息
+                //message = new Paho.MQTT.Message(device_id);
+                //message.destinationName = "/World";
+                //client.send(message);     //发送消息
+            };
+            function onConnectionLost(responseObject,n) {
+                //###加上网页断线的提示
+                //$("table>tbody>tr").eq(Math.floor(n)+1).children().eq(4).text("故障");//名称
+                if (responseObject.errorCode !== 0)
+                    console.log("onConnectionLost:"+responseObject.errorMessage);   //连接断开
+            };
+            function onMessageArrived(message) {
+                console.log("onMessageArrived:"+message.payloadString);   //显示发来的消息
+                recvmsg(message);
+                //client.disconnect(); 
+            };
+            //接收消息并处理
+            function recvmsg(message) {
+                //console.log("onMessageArrived:"+message.payloadString);   //显示发来的消息
+                var ret = message.payloadString;
+                var msgjson = JSON.parse(ret);
+
+                var tempval = msgjson.temperature;
+                var humival = msgjson.humidity;
+                var winddirection = msgjson.wind_direction;
+                var windspeed = msgjson.wind_velocity;
+
+                $("table>tbody>tr").eq(Math.floor(n)+1).children().eq(1).text(namearray[n]);//名称
+                //设备状态：dev_status 0 停止 1运行 2缺水故障 3欠压故障
+                
+                $("table>tbody>tr").eq(Math.floor(n)+1).children().eq(3).text(tempval/10 + "℃");//温度
+                $("table>tbody>tr").eq(Math.floor(n)+1).children().eq(4).text(humival/10 + "%");//湿度
+
+                // var winddrt = "无";
+                // switch(winddirection){
+                //     case 0: winddrt = "正北";
+                //     case 1: winddrt = "东北";
+                //     case 2: winddrt = "正东";
+                //     case 3: winddrt = "东南";
+                //     case 4: winddrt = "正南";
+                //     case 5: winddrt = "西南";
+                //     case 6: winddrt = "正西";
+                //     case 7: winddrt = "西北";
+                // }
+                        
+                $("table>tbody>tr").eq(Math.floor(n)+1).children().eq(5).text(winddirection/10+"°");//风向
+                $("table>tbody>tr").eq(Math.floor(n)+1).children().eq(6).text(windspeed/10+"km/h");//风速
+            };
+        }
+
+        //发送指令
+        function publishcmd(topic, command) {   //publishcmd("60b3105c/d0bae401bd98" + "/out",'{"dev_status":false}')
+            //var topic = "60b3105c/d0bae401bd98" + '/out';   //60b3105c/d0bae401bd98/out
+            message = new Paho.MQTT.Message(command);
+            message.destinationName = topic;
+            var clientindex = idarray.indexOf(topic.substring(0,21));
+            clientArray[clientindex].send(message);     //发送消息
+        };
+    </script>
+</html>
